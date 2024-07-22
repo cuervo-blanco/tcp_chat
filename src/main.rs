@@ -7,7 +7,7 @@ use local_ip_address::local_ip;
 use hostname::get;
 
 
-const SERVICE_NAME: &'static str = "_tcpchat._tcp.local";
+const SERVICE_NAME: &'static str = "_tcpchat._tcp.local.";
 
 #[async_std::main]
 async fn main() -> Result<(), Error> {
