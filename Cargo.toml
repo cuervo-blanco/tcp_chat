@@ -1,0 +1,9 @@
+[package]
+name = "tcp_chat"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+mdns = "3.0.0"
+futures-util = "0.3.30"
+async-std = "1.12.0"
