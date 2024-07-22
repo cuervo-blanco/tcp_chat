@@ -18,13 +18,14 @@ async fn main() -> Result<(), Error> {
     let local_ip = local_ip().unwrap();
     let hostname = get()?;
     let hostname = hostname.to_str().expect("Failed to get hostname");
+    let hostname = format!("{}.local.", hostname);
     let port = 5200;
     let properties = [("property_1", "test"), ("property_2", "1234")];
 
     let my_service = ServiceInfo::new(
         SERVICE_NAME,
         instance_name,
-        hostname,
+        &hostname,
         local_ip,
         port,
         &properties[..],
