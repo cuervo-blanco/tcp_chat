@@ -139,7 +139,7 @@ fn main () {
                     continue;
                 }
             };
-            if let Err(e) = stream.write_all(formatted_message.as_bytes()){
+            if let Err(e) = stream.write(formatted_message.as_bytes()){
                 eprintln!("Failed to write to stream: {}", e);
             }
             break;
