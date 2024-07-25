@@ -146,7 +146,7 @@ fn main () {
 
             }
 
-            let message = format!("{}: {}", username, message);
+            let message = format!("{}: {}", instance_name, message);
             let stream = match stream.try_clone() {
                 Ok(stream) => stream,
                 Err(e) => {
