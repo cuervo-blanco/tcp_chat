@@ -6,7 +6,7 @@ fn handle_client(mut stream: std::net::TcpStream) {
     let mut message = [0; 960];
     stream.read(&mut message).unwrap();
     let message = std::str::from_utf8(&message).unwrap();
-    print!("{}", message);
+    println!("{}", message);
 }
 
 fn main () {
@@ -131,18 +131,9 @@ fn main () {
 
             }
 
-            let formatted_message = format!("{}: {}", username, message);
-            let mut stream = match stream.try_clone() {
-                Ok(stream) => stream,
-                Err(e) => {
-                    eprintln!("Failed to clone stream: {}", e);
-                    continue;
-                }
-            };
-            if let Err(e) = stream.write(formatted_message.as_bytes()){
-                eprintln!("Failed to write to stream: {}", e);
-            }
-            break;
+            let message = format!("{}: {}", username, message);
+            let mut stream = stream.try_clone().unwrap();
+            stream.write(message.as_bytes()).unwrap();
         }
     }
 }
