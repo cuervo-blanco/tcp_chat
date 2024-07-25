@@ -147,7 +147,17 @@ fn main () {
             }
 
             let message = format!("{}: {}", username, message);
-            let mut stream = stream.try_clone().unwrap();
+            let stream = match stream.try_clone() {
+                Ok(stream) => stream,
+                Err(e) => {
+                    println!("Failed to clone stream for {}: {}", username, e);
+                    continue;
+                }
+            };           let mut stream = stream.try_clone().unwrap();
+            match stream.write(message.as_bytes()) {
+                Ok(_) => println!("Sent message to {}: {}", username, message),
+                Err(e) => println!("Failed to send message to {}: {}", username, e),
+            }
             stream.write(message.as_bytes()).unwrap();
         }
     }
