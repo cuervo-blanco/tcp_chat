@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 
 fn handle_client(mut stream: std::net::TcpStream) {
     let mut message = [0; 960];
-    stream.read(&mut message).unwrap();
+    match stream.read(&mut message) {
+        Ok(_) => println!("Message read successfully"),
+        Err(e) => println!("Failed to read message: {}", e),
+    }
     let message = std::str::from_utf8(&message).unwrap();
     println!("{}", message);
 }
@@ -22,19 +25,24 @@ fn main () {
     
     // Configure Service
     let mdns = mdns_sd::ServiceDaemon::new().expect("Failed to create daemon");
+    println!("ServiceDaemon created");
     let service_type = "_tcp_chat._tcp.local.";
     let ip =  local_ip_address::local_ip().unwrap();
+    println!("Local IP address: {}", ip);
     let host_name =  hostname::get()
         .expect("Unable to get host name");
-    let host_name = host_name.to_str().expect("Unable to convert to string");
+    let host_name = host_name.to_str()
+        .expect("Unable to convert to string");
     let host_name = format!("{}.local.", host_name);
+    println!("Host name: {}", host_name);
     let properties = [("property_1", "attribute_1"), ("property_2", "attribute_2")];
 
     // Open TCP port 18521
     let port: u16 = 18521;
     let socket_addr = format!("{}:{}", ip, port);
-    let listener = std::net::TcpListener::bind(socket_addr)
+    let listener = std::net::TcpListener::bind(socket_addr.clone())
         .expect("Failed to start listener");
+    println!("TCP Listener bound to address: {}", socket_addr);
 
     println!("Starting TCP listener thread...");
 
@@ -43,10 +51,11 @@ fn main () {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                        handle_client(stream)
+                    println!("New client connected");
+                    handle_client(stream)
                 },
-                Err(_e) => {
-                   todo!() 
+                Err(e) => {
+                    println!("Failed to accept connection: {}", e);
                 }
             }
 
@@ -62,12 +71,15 @@ fn main () {
         port,
         &properties[..],
         ).unwrap();
+    println!("Service Info created");
 
     // Broadcast service
     mdns.register(tcp_chat_service).expect("Failed to register service");
+    println!("Service registered");
 
     // Query for Services
     let receiver = mdns.browse(service_type).expect("Failed to browse");
+    println!("Browsing for services");
 
     // User table to store users discovered and their service information
     let user_table = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -80,28 +92,31 @@ fn main () {
         while let Ok(event) = receiver.recv() {
             match event {
                 mdns_sd::ServiceEvent::ServiceResolved(info) => {
+                    println!("Service resolved: {:?}", info);
                     // Send request to create tcp connection
                     let addresses = info.get_addresses_v4();
                     for address in addresses {
                         let mut user_table_clone = user_table_clone.lock().unwrap();
                         let user_socket = format!("{}:{}", address, info.get_port());
-                        let stream = std::net::TcpStream::connect(user_socket)
-                            .expect("Failed to connect to user...");
-                        user_table_clone.insert(info.get_fullname().to_string(), stream);
-                        let mut username = String::new();
-                        for char in info.get_fullname().chars() {
-                            if char != '.' {
-                                username.push(char); 
-                            } else {
-                                break;
-                            }
-                            
+                        match std::net::TcpStream::connect(&user_socket){
+                            Ok(stream) => {
+                                user_table_clone.insert(info.get_fullname().to_string(), stream);
+                                let mut username = String::new();
+                                for char in info.get_fullname().chars() {
+                                    if char != '.' {
+                                        username.push(char); 
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                println!("{} just connected", username);
+                            },
+                            Err(e) => println!("Failed to connect to user {}: {}", user_socket, e),
                         }
-                        
-                        println!("{} just connected", username);
                     }
                 },
                 _ => {
+                    println!("Unhandled mDNS event");
 
                 }
             }
