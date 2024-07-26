@@ -3,13 +3,20 @@ use std::io::{Write, Read};
 use std::sync::{Arc, Mutex};
 
 fn handle_client(mut stream: std::net::TcpStream) {
-    let mut message = [0; 960];
+    let mut message = [0; 512];
     match stream.read(&mut message) {
-        Ok(_) => println!("Message read successfully"),
+        Ok(size) => {
+            if size == 0 {
+                println!("Connection closed by the client");
+                return;
+            }
+            match std::str::from_utf8(&message[..size]){
+                Ok(message) => println!("{}", message),
+                Err(e) => println!("Failed to convert message to UTF-8: {}", e),
+            }
+        }
         Err(e) => println!("Failed to read message: {}", e),
     }
-    let message = std::str::from_utf8(&message).unwrap();
-    println!("{}", message);
 }
 
 fn main () {
@@ -22,7 +29,7 @@ fn main () {
     let mut instance_name = String::new();
     reader.read_line(&mut instance_name).unwrap();
     let instance_name = instance_name.replace("\n", "").replace(" ", "_");
-    
+
     // Configure Service
     let mdns = mdns_sd::ServiceDaemon::new().expect("Failed to create daemon");
     println!("ServiceDaemon created");
@@ -37,7 +44,7 @@ fn main () {
     println!("Host name: {}", host_name);
     let properties = [("property_1", "attribute_1"), ("property_2", "attribute_2")];
 
-    // Open TCP port 18521
+    // Open TCP port 18521 (listen to connections)
     let port: u16 = 18521;
     let socket_addr = format!("{}:{}", ip, port);
     let listener = std::net::TcpListener::bind(socket_addr.clone())
@@ -104,7 +111,7 @@ fn main () {
                                 let mut username = String::new();
                                 for char in info.get_fullname().chars() {
                                     if char != '.' {
-                                        username.push(char); 
+                                        username.push(char);
                                     } else {
                                         break;
                                     }
@@ -124,10 +131,10 @@ fn main () {
     });
 
     // Optional: Show Services Discovered
-    
+
     println!("Starting main thread...");
     loop {
-        // Take user input 
+        // Take user input
         let reader = std::io::stdin();
         let mut message: String = String::new();
         reader.read_line(&mut message).unwrap();
@@ -139,7 +146,7 @@ fn main () {
             let mut username = String::new();
             for char in user.chars() {
                 if char != '.' {
-                    username.push(char); 
+                    username.push(char);
                 } else {
                     break;
                 }
@@ -153,12 +160,13 @@ fn main () {
                     println!("Failed to clone stream for {}: {}", username, e);
                     continue;
                 }
-            };           let mut stream = stream.try_clone().unwrap();
+            };
+            let mut stream = stream.try_clone().unwrap();
             match stream.write(message.as_bytes()) {
                 Ok(_) => println!("Sent message to {}: {}", username, message),
                 Err(e) => println!("Failed to send message to {}: {}", username, e),
             }
-            stream.write(message.as_bytes()).unwrap();
+            stream.write(message.as_bytes()).expect("Unable to send message");
         }
     }
 }
