@@ -3,12 +3,13 @@ use std::io::{Write, Read};
 use std::sync::{Arc, Mutex};
 
 fn handle_client(mut stream: std::net::TcpStream) {
-    let mut message = [0; 960];
-    match stream.read(&mut message) {
+    let mut buffer = [0; 960];
+    match stream.read(&mut buffer) {
         Ok(_) => println!("Message read successfully"),
         Err(e) => println!("Failed to read message: {}", e),
     }
-    let message = std::str::from_utf8(&message).unwrap();
+    let message = std::str::from_utf8(&buffer).unwrap();
+    std::io::stdout 
     println!("{}", message);
 }
 
@@ -159,6 +160,10 @@ fn main () {
                 Err(e) => println!("Failed to send message to {}: {}", username, e),
             }
             stream.write(message.as_bytes()).unwrap();
+            
+            // Something must refresh the terminal every second or so clear out the display
+            // fetch the information from the data structure containing the streams and user names and print it
+            // Clear out the buffer 
         }
     }
 }
