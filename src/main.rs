@@ -1,37 +1,68 @@
 #[allow(unused_imports)]
 use std::io::{Write, Read};
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
-fn handle_client(mut stream: std::net::TcpStream) {
-<<<<<<< HEAD
-    let mut buffer = [0; 960];
+
+fn handle_client(mut stream: std::net::TcpStream, position: &Position) {
+    let mut buffer: &[u8] = &[0; 960];
     match stream.read(&mut buffer) {
-        Ok(_) => println!("Message read successfully"),
-        Err(e) => println!("Failed to read message: {}", e),
-    }
-    let message = std::str::from_utf8(&buffer).unwrap();
-    std::io::stdout
-        //Working on this
-    println!("{}", message);
-=======
-    let mut message = [0; 512];
-    match stream.read(&mut message) {
-        Ok(size) => {
-            if size == 0 {
+        Ok(data) => {
+            let message: Vec<String> = bincode::deserialize(&buffer).unwrap();
+            if data == 0 {
                 println!("Connection closed by the client");
                 return;
             }
-            match std::str::from_utf8(&message[..size]){
-                Ok(message) => println!("{}", message),
-                Err(e) => println!("Failed to convert message to UTF-8: {}", e),
-            }
+            for (i, &(row, col)) in position.iter().enumerate() {
+                write_at_position(row, col, &message[i]);
+            }    
         }
-        Err(e) => println!("Failed to read message: {}", e),
+        Err(e) => println!("Error reading byte stream: {}", e),
     }
->>>>>>> refs/remotes/origin/main
 }
 
+fn  move_cursor(row: u32, col: u32) {
+    print!("\x1B[{};{}H", row, col);
+    std::io::stdout().flush().unwrap();
+}
+
+fn  clear_terminal() {
+    print!("\x1B[2J");
+    std::io::stdout().flush().unwrap();
+}
+
+fn write_at_position(row: u32, col: u32, text: &str) {
+    move_cursor(row, col);
+    print!("{} ", text);
+    std::io::stdout().flush().unwrap();
+}
+
+
+#[allow(dead_code)]
+struct Connection {
+    user: String,
+    stream: TcpStream,
+}
+
+fn update_position(positions: &Position) -> Position {
+    for (row, col) in positions.iter().enumerate() {
+        row += 1;
+    }
+}
+
+type Message<'a> = [&'a str];
+type Position = [(u32, u32)];
+
 fn main () {
+    clear_terminal();
+    // Initial Position
+    let mut positions: &Position = &[(1, 1), (1, 20)];
+    let texts: &Message = &["Username", "Message"];
+
+    for (i, &(row, col)) in positions.iter().enumerate() {
+        write_at_position(row, col, texts[i]);
+    }    
+
     println!("...preparing to take off.");
     println!("");
     println!("Enter Username:");
@@ -71,7 +102,8 @@ fn main () {
             match stream {
                 Ok(stream) => {
                     println!("New client connected");
-                    handle_client(stream)
+                    let new_positions = update_position(positions);
+                    handle_client(stream, &new_positions)
                 },
                 Err(e) => {
                     println!("Failed to accept connection: {}", e);
@@ -147,11 +179,12 @@ fn main () {
     println!("Starting main thread...");
     loop {
         // Take user input
+        let message = [];
         let reader = std::io::stdin();
-        let mut message: String = String::new();
-        reader.read_line(&mut message).unwrap();
+        let mut buffer: String = String::new();
+        reader.read_line(&mut buffer).unwrap();
         let user_table = user_table.lock().unwrap();
-        let message = message.trim();
+        let input = buffer.trim();
         // Send message to each socket upon user input Enter
         // Write to the streams in those sockets
         for (user, stream) in user_table.iter() {
@@ -165,7 +198,9 @@ fn main () {
 
             }
 
-            let message = format!("{}: {}", instance_name, message);
+            let message = [&username, &input.to_string(), "0"];
+            let encoded_message = bincode::serialize(&message).unwrap();
+
             let stream = match stream.try_clone() {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -174,19 +209,10 @@ fn main () {
                 }
             };
             let mut stream = stream.try_clone().unwrap();
-            match stream.write(message.as_bytes()) {
-                Ok(_) => println!("Sent message to {}: {}", username, message),
-                Err(e) => println!("Failed to send message to {}: {}", username, e),
-            }
-<<<<<<< HEAD
-            stream.write(message.as_bytes()).unwrap();
-            
+            stream.write(&encoded_message).unwrap();
             // Something must refresh the terminal every second or so clear out the display
             // fetch the information from the data structure containing the streams and user names and print it
             // Clear out the buffer 
-=======
-            stream.write(message.as_bytes()).expect("Unable to send message");
->>>>>>> refs/remotes/origin/main
         }
     }
 }
