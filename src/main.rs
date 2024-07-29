@@ -1,5 +1,6 @@
 use std::io::{Write, Read};
 use std::sync::{Arc, Mutex, Condvar};
+#[allow(unused_imports)]
 use std::time::Duration;
 
 //---Definitions---//
@@ -21,10 +22,10 @@ fn  move_cursor(row: u32, col: u32) {
 }
 fn demultiplex(text: String)-> Vec<String> {
     let mut spread = Vec::new();
-    if let Some(slash_index) = text.find("/#t/") {
+    if let Some(slash_index) = text.find("#") {
         let username: &str = &text[..slash_index];
         spread.push(username.to_string());
-        let message: &str = &text[slash_index + 4..];
+        let message: &str = &text[slash_index + 1..];
         spread.push(message.to_string());
     }
     spread
@@ -61,7 +62,7 @@ fn main () {
     let shared_positions =  Arc::new((Mutex::new(positions.clone()), Condvar::new()));
 
     #[allow(unused_mut)]
-    let mut header = demultiplex("username/#t/message".to_string()); 
+    let mut header = demultiplex("username#message".to_string()); 
     // Equivalent to the header is the message, it's meant to carry the message 
     // and pass it along the threads
     #[allow(unused_mut)]
@@ -122,21 +123,36 @@ fn main () {
             match tcp_stream {
                 Ok(stream) => {
                     let mut stream = stream.try_clone().unwrap();
+                    println!("I arrive here fine: 1");
                     let mut buffer = [0; 512];
+                    println!("I arrive here fine: 2");
                     let bytes_read = stream.read(&mut buffer).unwrap();
-                    if bytes_read == 0 {
-                        break;
-                    }
+                    println!("I arrive here fine: 3");
 
                     let (p_lock, pcvar) = &*sp;
+                    println!("I arrive here fine: 4");
                     let mut positions = p_lock.lock().unwrap();
+                    println!("I arrive here fine: 5");
                     let (m_lock, mcvar) = &*msg;
-                    let mut incoming_message = m_lock.lock().unwrap();
+                    println!("I arrive here fine: 6");
+                    let mut incoming_message = match m_lock.lock() {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            println!("Error locking message: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
 
+                    println!("I arrive here fine: 7");
                     let mut data = Vec::new();
+
+                    println!("I arrive here fine: 8");
                     data.extend_from_slice(&buffer[..bytes_read]);
+                    println!("I arrive here fine: 9");
                     if let Some(pos) = data.iter().position(|&b| b == b'\n') {
+                        println!("I arrive here fine: 10");
                         let text = data.split_off(pos + 1);
+                        println!("I arrive here fine: 11");
 
                         if let Ok(string) = std::str::from_utf8(&text) {
                             // Update the positions 
@@ -165,7 +181,7 @@ fn main () {
                 Err(e) => println!("Error getting stream: {}", e),
             }
         }
-    });
+    }).join().unwrap();
 
     // ----------- mDNS Service Thread ----------//
     
@@ -251,8 +267,10 @@ fn main () {
         let reader = std::io::stdin();
         let mut buffer: String = String::new();
         reader.read_line(&mut buffer).unwrap();
-        let user_table = user_table.lock().unwrap();
         let input = buffer.trim();
+        println!("Input: {}", input);
+
+        let user_table = user_table.lock().unwrap();
         // Send message to each socket upon user input Enter
         // Write to the streams in those sockets
         for (user, stream) in user_table.iter() {
@@ -268,24 +286,23 @@ fn main () {
             }
 
             let message = vec![username.to_string(), input.to_string()];
-            let message = message.join("#/t/");
+            let message = message.join("#");
+            println!("Message to send: {}", message);
             let encoded_message: Vec<u8> = bincode::serialize(&message).unwrap();
+            println!("Encoded message: {:?}", encoded_message);
 
             // Verify if this accessing of the operation is valid
-            let stream = match stream.try_clone() {
-                Ok(stream) => stream,
+            match stream.try_clone() {
+                Ok(mut stream) => {
+                    if let Err(e) = stream.write_all(&encoded_message) {
+                        eprintln!("Failed to send message to {}: {}", user, e);
+                    }
+                },
                 Err(e) => {
                     println!("Failed to clone stream for {}: {}", username, e);
                     continue;
                 }
             };
-            let mut stream = stream.try_clone().unwrap();
-            // For testing purposes send message written at different intervals
-            // of time
-            loop {
-                stream.write(&encoded_message).unwrap();
-                std::thread::sleep(Duration::from_millis(2000));
-            }
             // Something must refresh the terminal every second or so clear out the display
             // fetch the information from the data structure containing the streams and user names and print it
             // Clear out the buffer 
