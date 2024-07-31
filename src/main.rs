@@ -132,37 +132,37 @@ fn main () {
                 debug_println!("THREAD 2: Listening for incoming packets.");
                 match tcp_stream {
                     Ok(stream) => {
-                        loop {
                             let mut stream = stream.try_clone().unwrap();
                             debug_println!("THREAD 2: Stream Cloned <{:?}>", stream);
                             let mut buffer = [0; 512];
                             debug_println!("THREAD 2: Memory allocated to buffer: {:?}", buffer);
 
-                            let bytes_read = stream.read(&mut buffer).unwrap();
-                            debug_println!("THREAD 2: Incoming Bytes_Read: {:?}", &buffer[..bytes_read]);
-                            let incoming_message = &buffer[..bytes_read];
-                            debug_println!("THREAD 2: Incoming Message: {:?}", incoming_message);
+                            loop {
+                                let bytes_read = stream.read(&mut buffer).unwrap();
+                                debug_println!("THREAD 2: Incoming Bytes_Read: {:?}", &buffer[..bytes_read]);
+                                let incoming_message = &buffer[..bytes_read];
+                                debug_println!("THREAD 2: Incoming Message: {:?}", incoming_message);
 
-                            let mut data = Vec::new();
-                            debug_println!("THREAD 2: Allocating Memory (DATA) for Incoming Message: data {:?}", data);
+                                let mut data = Vec::new();
+                                debug_println!("THREAD 2: Allocating Memory (DATA) for Incoming Message: data {:?}", data);
 
-                            data.extend_from_slice(incoming_message);
-                            debug_println!("THREAD 2: Saving buffer: data {:?}", data);
-                            let filtered_data: Vec<u8> = data
-                                .into_iter()
-                                .filter(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                                .collect();
-                            let mut msg: String = match String::from_utf8(filtered_data) {
-                                Ok(s) => {
-                                    debug_println!("THREAD 2: Converted string: {}", s);
-                                    s
-                                },
-                                Err(e) => { 
-                                    eprintln!("THREAD 2: Failed to convert bytes to string: {}", e);
-                                    std::process::exit(1);
-                                    
-                                }
-                            };
+                                data.extend_from_slice(incoming_message);
+                                debug_println!("THREAD 2: Saving buffer: data {:?}", data);
+                                let filtered_data: Vec<u8> = data
+                                    .into_iter()
+                                    .filter(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                                    .collect();
+                                let mut msg: String = match String::from_utf8(filtered_data) {
+                                    Ok(s) => {
+                                        debug_println!("THREAD 2: Converted string: {}", s);
+                                        s
+                                    },
+                                    Err(e) => { 
+                                        eprintln!("THREAD 2: Failed to convert bytes to string: {}", e);
+                                        std::process::exit(1);
+                                        
+                                    }
+                                };
                             
                                 debug_println!("THREAD 2: Message: {:?}", msg);
                                 fn find_position(string: &String, end_mark: char) -> usize {
