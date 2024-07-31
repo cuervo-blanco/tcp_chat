@@ -61,6 +61,7 @@ fn main () {
     let user_table_clone = Arc::clone(&user_table);
     debug_println!("MAIN: Data Structures Initialized");
 
+    let name = instance_name.clone();
     // -------- Input Thread ------- //
     std::thread::spawn ( move || {
         debug_println!("THREAD 1: Thread Initialized");
@@ -79,7 +80,7 @@ fn main () {
                 let username: String = user.split('.').next().unwrap_or("").to_string();
                 debug_println!("THREAD 1: Sending message to: {:?}", username);
 
-                let message = vec![username.to_string(), input.to_string(), TERMINATOR.to_string()].join(SEPARATOR);
+                let message = vec![name.to_string(), input.to_string(), TERMINATOR.to_string()].join(SEPARATOR);
                 debug_println!("THREAD 1: Message to Send: {:?}", message);
                 let encoded_message: Vec<u8> = bincode::serialize(&message).unwrap();
                 debug_println!("THREAD 1: Encoded message: {:?}", encoded_message);
