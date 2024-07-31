@@ -30,6 +30,15 @@ fn username_take()-> String {
     let instance_name = instance_name.replace("\n", "").replace(" ", "_");
     instance_name
 }
+#[allow(dead_code)]
+fn find_position(string: &String, end_mark: char) -> usize {
+    if let Some(pos) = string.chars().position(|b| b == end_mark){
+        return pos
+    } else {
+        debug_println!(" THREAD 2: Failed to get position");
+        0
+    }
+}
 
 fn main () {
     // Initial Position
@@ -121,7 +130,7 @@ fn main () {
     let socket_addr = format!("{}:{}", ip, port);
     // Open TCP port 18521 (listen to connections)
     let listener = std::net::TcpListener::bind(socket_addr.clone())
-        .expect("Failed to start listener");
+        .expect("Failed to bind listener");
 
     debug_println!("THREAD 2: Starting TCP stream reader and text generator thread...");
     std::thread::spawn( move || {
@@ -134,74 +143,76 @@ fn main () {
                     Ok(stream) => {
                             let mut stream = stream.try_clone().unwrap();
                             debug_println!("THREAD 2: Stream Cloned <{:?}>", stream);
-                            let mut buffer = [0; 512];
-                            debug_println!("THREAD 2: Memory allocated to buffer: {:?}", buffer);
+                            std::thread::spawn(move || {
+                                let mut buffer = [0; 512];
+                                debug_println!("THREAD 2: Memory allocated to buffer: {:?}", buffer);
+                                loop {
+                                    match stream.read(&mut buffer) {
+                                        Ok(bytes_read) => {
+                                            if bytes_read == 0 {
+                                            break;
+                                            }
 
-                            loop {
-                                let bytes_read = stream.read(&mut buffer).unwrap();
-                                debug_println!("THREAD 2: Incoming Bytes_Read: {:?}", &buffer[..bytes_read]);
-                                let incoming_message = &buffer[..bytes_read];
-                                debug_println!("THREAD 2: Incoming Message: {:?}", incoming_message);
+                                            debug_println!("THREAD 2: Incoming Bytes_Read: {:?}", &buffer[..bytes_read]);
+                                            let incoming_message = &buffer[..bytes_read];
+                                            debug_println!("THREAD 2: Incoming Message: {:?}", incoming_message);
 
-                                let mut data = Vec::new();
-                                debug_println!("THREAD 2: Allocating Memory (DATA) for Incoming Message: data {:?}", data);
+                                            let mut data = Vec::new();
+                                            debug_println!("THREAD 2: Allocating Memory (DATA) for Incoming Message: data {:?}", data);
 
-                                data.extend_from_slice(incoming_message);
-                                debug_println!("THREAD 2: Saving buffer: data {:?}", data);
-                                let filtered_data: Vec<u8> = data
-                                    .into_iter()
-                                    .filter(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                                    .collect();
-                                let mut msg: String = match String::from_utf8(filtered_data) {
-                                    Ok(s) => {
-                                        debug_println!("THREAD 2: Converted string: {}", s);
-                                        s
-                                    },
-                                    Err(e) => { 
-                                        eprintln!("THREAD 2: Failed to convert bytes to string: {}", e);
-                                        std::process::exit(1);
-                                        
-                                    }
-                                };
-                            
-                                debug_println!("THREAD 2: Message: {:?}", msg);
-                                fn find_position(string: &String, end_mark: char) -> usize {
-                                    if let Some(pos) = string.chars().position(|b| b == end_mark){
-                                        return pos
-                                    } else {
-                                        debug_println!(" THREAD 2: Failed to get position");
-                                        std::process::exit(2);
+                                            data.extend_from_slice(incoming_message);
+                                            debug_println!("THREAD 2: Saving buffer: data {:?}", data);
+                                            let filtered_data: Vec<u8> = data
+                                                .into_iter()
+                                                .filter(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                                                .collect();
+                                            let msg: String = match String::from_utf8(filtered_data) {
+                                                Ok(s) => {
+                                                    debug_println!("THREAD 2: Converted string: {}", s);
+                                                    s
+                                                },
+                                                Err(e) => { 
+                                                    eprintln!("THREAD 2: Failed to convert bytes to string: {}", e);
+                                                    continue;
+                                                }
+                                            };
+
+                                            debug_println!("THREAD 2: Message: {:?}", msg);
+                                            let pos = msg.find(TERMINATOR).unwrap_or(msg.len());
+                                            debug_println!("THREAD 2: Finding position of message_end: {:?}", pos);
+                                            let text = &msg[..pos];
+                                            debug_println!("THREAD 2: Splitting message: {}", text);
+
+                                            // Update the positions 
+                                            // Send the header to the print thread
+                                            debug_println!("THREAD 2: Converting message to string: {}", text);
+                                            let mut spread = Vec::new();
+                                            debug_println!("THREAD 2: Allocating Memory for received message: {:?}", spread);
+
+                                            if let Some(slash_index) = text.find(SEPARATOR) {
+                                                let username: &str = &text[..slash_index];
+                                                spread.push(username.to_string());
+                                                let message: &str = &text[slash_index + 1..text.len() - 1];
+                                                spread.push(message.to_string());
+                                            }
+                                            debug_println!("THREAD 2: Cleaning up message: {:?}", spread);
+                                            // Print message on screen
+                                            if !spread.is_empty() {
+                                                println!("{}", spread.join(": "));
+                                            }
+                                        },
+                                        Err(e) => {
+                                            eprintln!("Failed to read from stream: {}", e);
+                                            break;
+                                        }
                                     }
                                 }
-                                let pos = find_position(&msg, '\n');
-                                debug_println!("THREAD 2: Finding position of message_end: {:?}", pos);
-                                let _text = msg.split_off(pos + 1);
-                                debug_println!("THREAD 2: Splitting message: {}", _text);
-
-                                // Update the positions 
-                                // Send the header to the print thread
-                                let string: String = msg.to_string();
-                                debug_println!("THREAD 2: Converting message to string: {}", string);
-                                let mut spread = Vec::new();
-                                debug_println!("THREAD 2: Allocating Memory for received message: {:?}", spread);
-
-                                if let Some(slash_index) = string.find(SEPARATOR) {
-                                    let username: &str = &string[..slash_index];
-                                    spread.push(username.to_string());
-                                    let message: &str = &string[slash_index + 1..string.len() - 2];
-                                    spread.push(message.to_string());
-                                }
-                                debug_println!("THREAD 2: Cleaning up message: {:?}", spread);
-                                // Print message on screen
-                                println!("{}", spread.join(": "));
-                        
-                        }
+                            });
+                        },
+                        Err(e) => println!("Error getting stream: {}", e),
                     }
-                    Err(e) => println!("Error getting stream: {}", e),
                 }
             }
-            debug_println!("THREAD 2: Restarting first loop");
-        }
     });
 
     // ----------- mDNS Service Thread ----------//
