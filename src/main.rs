@@ -207,8 +207,8 @@ async fn main () {
     // ---- Sending Audio - Read User Input ----//
     let (tx, rx) = channel();
     thread::spawn(move || {
+        debug_println!("INPUT: Reading user keyboard input");
         loop {
-            debug_println!("INPUT: Reading user keyboard input");
             if event::poll(Duration::from_millis(100)).unwrap() {
                 if let Event::Key(KeyEvent { code, .. }) = event::read().unwrap(){
                     tx.send(code).unwrap();
