@@ -62,6 +62,18 @@ pub fn get_audio_config(device: &cpal::Device) -> Result<cpal::StreamConfig, cpa
         Ok(cnfg) => cnfg,
         Err(e) => {
             println!("AUDIO SYNC I: Unable to get default config: {}", e);
+
+            // Try to find a supported configuration
+            if let Ok(mut supported_configs) = device.supported_output_configs() {
+                if let Some(supported_config) = supported_configs.next() {
+                    println!("Using a supported configuration instead.");
+                    return Ok(cpal::StreamConfig {
+                        channels: supported_config.channels(),
+                        sample_rate: supported_config.min_sample_rate(),
+                        buffer_size: cpal::BufferSize::Fixed(256),
+                    });
+                }
+            }
             return Err(e);
         }
     };
@@ -73,6 +85,16 @@ pub fn get_audio_config(device: &cpal::Device) -> Result<cpal::StreamConfig, cpa
     };
 
     Ok(config)
+}
+pub fn list_supported_configs(device: &cpal::Device) {
+    let supported_configs_range = device.supported_output_configs().unwrap();
+    println!("Suported output configurations:");
+    for config in supported_configs_range {
+        println!("Channels: {}, Min Sample Rate: {}, Max Sample Rate: {}",
+            config.channels(),
+            config.min_sample_rate().0,
+            config.max_sample_rate().0);
+    }
 }
 // ============================================
 //        Start Input Stream

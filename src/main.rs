@@ -49,6 +49,11 @@ async fn main () {
             debug_println!("MAIN: AUDIO INITIALIZATION FAILED");
         return;
     };
+    debug_println!("MAIN: Audio Input list of supported configs:");
+    audio::list_supported_configs(&input_device);
+    debug_println!("MAIN: Audio Output list of supported configs:");
+    audio::list_supported_configs(&output_device);
+
     let input_config = audio::get_audio_config(&input_device)
         .expect("Failed to get audio input config");
     debug_println!("MAIN: INPUT AUDIO CONFIG: {:?}", input_config);
