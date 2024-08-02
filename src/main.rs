@@ -44,28 +44,6 @@ fn username_take()-> String {
 async fn main () {
     // Initial Position
     clear_terminal();
-    debug_println!("MAIN: AUDIO INITIALIZATION IN PROCESS");
-    let (Some(input_device), Some(output_device)) = audio::initialize_audio_interface() else {
-            debug_println!("MAIN: AUDIO INITIALIZATION FAILED");
-        return;
-    };
-    debug_println!("MAIN: Audio Input list of supported configs:");
-    audio::list_supported_configs(&input_device);
-    debug_println!("MAIN: Audio Output list of supported configs:");
-    audio::list_supported_configs(&output_device);
-
-    let input_config = audio::get_audio_config(&input_device)
-        .expect("Failed to get audio input config");
-    debug_println!("MAIN: INPUT AUDIO CONFIG: {:?}", input_config);
-    let output_config = audio::get_audio_config(&output_device)
-        .expect("Failed to get audio output config");
-    debug_println!("MAIN: OUTPUT AUDIO CONFIG: {:?}", output_config);
-    let input_device = Arc::new(Mutex::new(input_device));
-    let input_config = Arc::new(Mutex::new(input_config));
-
-    let audio_buffer = Arc::new(Mutex::new(Vec::new()));
-    debug_println!("MAIN: Allocated audio buffer: {:?}", audio_buffer);
-    let received_data = Arc::clone(&audio_buffer);
 
     println!("");
     println!("Enter Username:");
@@ -90,21 +68,31 @@ async fn main () {
     let (tx, rx) = channel();
     std::thread::spawn ( move || {
         debug_println!("THREAD 1: Thread Initialized");
+        let user_table_clone = Arc::clone(&user_table);
+        let user_table = match user_table_clone.lock(){
+            Ok(user_table) => {
+                debug_println!("THREAD 1: Succesful capture of user table: {:?}", user_table);
+                user_table
+            }
+            #[allow(unused_variables)]
+            Err(e) => { 
+                debug_println!("THREAD 1: Unable to get user table: {}", e);
+                std::process::exit(20);
+            }
+
+        };
         loop {
             // Take user input
             let reader = std::io::stdin();
             let mut buffer: String = String::new();
             reader.read_line(&mut buffer).unwrap();
             let input = buffer.trim();
+
             debug_println!("THREAD 1: User Input: {}", input);
-             if input == "audio.start()" {
-                 tx.send("audio.start()".to_string()).unwrap();
-             } else if input == "audio.stop()" {
-                tx.send("audio.stop()".to_string()).unwrap();
-             } else {
-                 let user_table = user_table.lock().unwrap();
-                 debug_println!("THREAD 1: User Table Lock: {:?}", user_table);
-                 for (user, stream) in user_table.iter() {
+
+            if input != "audio.start()" && input != "audio.stop()" {
+                debug_println!("THREAD 1: User Table Lock: {:?}", user_table);
+                for (user, stream) in user_table.iter() {
                      // Clean up the name, get rid of .local
                      let username: String = user.split('.').next().unwrap_or("").to_string();
                      debug_println!("THREAD 1: Sending message to: {:?}", username);
@@ -137,39 +125,47 @@ async fn main () {
                      // Clear out the buffer 
                      debug_println!("THREAD 1: RESTARTING LOOP #1");
                  }
-             }
+             } else if input == "audio.start()" {
+                 tx.send("audio.start()".to_string()).unwrap();
+             } else if input == "audio.stop()" {
+                 tx.send("audio.stop()".to_string()).unwrap();
+             } 
 
              debug_println!("THREAD 1: RESTARTING MAIN LOOP");
         }
     });
 
-    // A thread to receive the bytes coming from a tcp stream, 
-    // convert the byte stream into a String (with a termination symbol
-    // or null character to signify the end of the message of a user
-    // the messages are going to be strutured as such:
-    // sender/#t/message/n
-    // with /n being the escape character
-    // with t standig for text and e for end
-    // When it packages the info it passes it to the print thread
-    // that will update the current position and print the provided strings
+    //---- Audio Setup-----//
 
-    //---- The TCP Thread -----//
+    debug_println!("MAIN: AUDIO INITIALIZATION IN PROCESS");
+    let (Some(input_device), Some(output_device)) = audio::initialize_audio_interface() else {
+        debug_println!("MAIN: AUDIO INITIALIZATION FAILED");
+        return;
+    };
 
-    debug_println!("THREAD 2: Thread Initializing Parameters");
-    // Get information from local host to start tcp stream
-    let ip =  local_ip_address::local_ip().unwrap();
-    debug_println!("THREAD 2: Local IP {}", ip);
-    let port: u16 = 18521;
-    let tcp_socket_addr = format!("{}:{}", ip, port);
-    debug_println!("THREAD 2: TCP Socket Address {}", tcp_socket_addr);
-    // Open TCP port 18521 (listen to connections)
-    let listener = std::net::TcpListener::bind(tcp_socket_addr.clone())
-        .expect("Failed to bind listener");
-    debug_println!("THREAD 2: TcpListener listening on TCP address");
+    debug_println!("MAIN: Audio Input list of supported configs:");
+    audio::list_supported_configs(&input_device);
+    debug_println!("MAIN: Audio Output list of supported configs:");
+    audio::list_supported_configs(&output_device);
+
+    let input_config = audio::get_audio_config(&input_device)
+        .expect("Failed to get audio input config");
+    debug_println!("MAIN: INPUT AUDIO CONFIG: {:?}", input_config);
+    let output_config = audio::get_audio_config(&output_device)
+        .expect("Failed to get audio output config");
+
+    // Audio Resources
+    debug_println!("MAIN: OUTPUT AUDIO CONFIG: {:?}", output_config);
+    let input_device = Arc::new(Mutex::new(input_device));
+    let input_config = Arc::new(Mutex::new(input_config));
+    let audio_buffer = Arc::new(Mutex::new(Vec::new()));
+    debug_println!("MAIN: Allocated audio buffer: {:?}", audio_buffer);
+    let received_data = Arc::clone(&audio_buffer);
 
     //---- The UDP Thread -----//
 
     debug_println!("UDP: Initializing udp thread");
+    let ip =  local_ip_address::local_ip().unwrap();
     let udp_port: u16 = 18522;
     let udp_socket_addr = format!("{}:{}", ip, udp_port);
     let udp_socket = Arc::new(Mutex::new(UdpSocket::bind(udp_socket_addr.clone()).unwrap()));
@@ -266,6 +262,19 @@ async fn main () {
             }
         }
     });
+    //---- The TCP Thread -----//
+
+    debug_println!("THREAD 2: Thread Initializing Parameters");
+    // Get information from local host to start tcp stream
+    let ip =  local_ip_address::local_ip().unwrap();
+    debug_println!("THREAD 2: Local IP {}", ip);
+    let port: u16 = 18521;
+    let tcp_socket_addr = format!("{}:{}", ip, port);
+    debug_println!("THREAD 2: TCP Socket Address {}", tcp_socket_addr);
+    // Open TCP port 18521 (listen to connections)
+    let listener = std::net::TcpListener::bind(tcp_socket_addr.clone())
+        .expect("Failed to bind listener");
+    debug_println!("THREAD 2: TcpListener listening on TCP address");
 
     debug_println!("THREAD 2: Starting TCP stream reader and text generator thread...");
     std::thread::spawn( move || {

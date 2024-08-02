@@ -74,7 +74,13 @@ pub fn get_audio_config(device: &cpal::Device) -> Result<cpal::StreamConfig, cpa
                     });
                 }
             }
-            return Err(e);
+            
+            let config =  cpal::StreamConfig {
+                channels: 2,
+                sample_rate: cpal::SampleRate(44100),
+                buffer_size: cpal::BufferSize::Fixed(256),
+            };
+            return Ok(config);
         }
     };
 
