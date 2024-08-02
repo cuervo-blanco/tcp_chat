@@ -68,19 +68,6 @@ async fn main () {
     let (tx, rx) = channel();
     std::thread::spawn ( move || {
         debug_println!("THREAD 1: Thread Initialized");
-        let user_table_clone = Arc::clone(&user_table);
-        let user_table = match user_table_clone.lock(){
-            Ok(user_table) => {
-                debug_println!("THREAD 1: Succesful capture of user table: {:?}", user_table);
-                user_table
-            }
-            #[allow(unused_variables)]
-            Err(e) => { 
-                debug_println!("THREAD 1: Unable to get user table: {}", e);
-                std::process::exit(20);
-            }
-
-        };
         loop {
             // Take user input
             let reader = std::io::stdin();
@@ -91,6 +78,18 @@ async fn main () {
             debug_println!("THREAD 1: User Input: {}", input);
 
             if input != "audio.start()" && input != "audio.stop()" {
+                let user_table_clone = Arc::clone(&user_table);
+                let user_table = match user_table_clone.lock() {
+                    Ok(user_table) => { 
+                        debug_println!("THREAD 1: Succesfully got user table: {:?}", user_table);
+                        user_table
+                    }
+                    #[allow(unused_variables)]
+                    Err(e) => {
+                        debug_println!("THREAD 1: Problem getting user table: {:?}", e);
+                        std::process::exit(20);
+                    }
+                };
                 debug_println!("THREAD 1: User Table Lock: {:?}", user_table);
                 for (user, stream) in user_table.iter() {
                      // Clean up the name, get rid of .local
@@ -120,18 +119,15 @@ async fn main () {
                              continue;
                          }
                      };
-                     // Something must refresh the terminal every second or so clear out the display
-                     // fetch the information from the data structure containing the streams and user names and print it
-                     // Clear out the buffer 
-                     debug_println!("THREAD 1: RESTARTING LOOP #1");
                  }
+                drop(user_table);
+                debug_println!("THREAD 1: RESTARTING LOOP #1");
              } else if input == "audio.start()" {
                  tx.send("audio.start()".to_string()).unwrap();
              } else if input == "audio.stop()" {
                  tx.send("audio.stop()".to_string()).unwrap();
              } 
-
-             debug_println!("THREAD 1: RESTARTING MAIN LOOP");
+            debug_println!("THREAD 1: RESTARTING MAIN LOOP");
         }
     });
 
@@ -406,37 +402,42 @@ async fn main () {
                         let addresses = info.get_addresses_v4();
                         debug_println!("THREAD 3: Addresses found: {:?}", addresses);
                         for address in addresses {
-                            let mut user_table = user_table_clone.lock().unwrap();
                             let user_socket = format!("{}:{}", address, info.get_port());
-                            debug_println!("THREAD 3: User Socket: {:?}", user_socket);
+                            debug_println!("THREAD 3: TCP Socket: {:?}", user_socket);
                             let user_udp_socket = format!("{}:18522", address);
-                            debug_println!("THREAD 3: User ip&socket pair: {}", user_udp_socket);
+                            debug_println!("THREAD 3: Udp Socket: {}", user_udp_socket);
                             let user_hostname = info.get_hostname();
-                            let mut ip_table = ip_table.lock().expect("THREAD 3: Failed to lock ip_table");
-                            ip_table.insert(
-                                user_hostname.to_string(), 
-                                user_udp_socket
+
+                            {
+                                let mut ip_table = ip_table.lock().expect("THREAD 3: Failed to lock ip_table");
+                                ip_table.insert(
+                                    user_hostname.to_string(), 
+                                    user_udp_socket
                                 );
-                            debug_println!("Inserted new user into ip table: {:?}", ip_table);
+                                debug_println!("Inserted new user into ip table: {:?}", ip_table);
+                            }
+
                             // --------- Tcp Connection ---------//
-                            match std::net::TcpStream::connect(&user_socket){
-                                Ok(stream) => {
-                                    user_table.insert(info.get_fullname().to_string(), stream);
-                                    
-                                    debug_println!("THREAD 3: Inserted New User into User Table: {:?}", user_table_clone);
-                                    debug_println!("THREAD 3: Inserted New User into User Table: {:?}", user_table_clone);
-                                    let mut username = String::new();
-                                    debug_println!("THREAD 3: Username: {:?}", username);
-                                    for char in info.get_fullname().chars() {
-                                        if char != '.' {
-                                            username.push(char);
-                                        } else {
-                                            break;
+                            {
+                                let mut user_table = user_table_clone.lock().unwrap();
+                                match std::net::TcpStream::connect(&user_socket){
+                                    Ok(stream) => {
+                                        user_table.insert(info.get_fullname().to_string(), stream);
+                                        debug_println!("THREAD 3: Inserted New User into User Table: {:?}", user_table_clone);
+                                        drop(user_table);
+                                        let mut username = String::new();
+                                        debug_println!("THREAD 3: Username: {:?}", username);
+                                        for char in info.get_fullname().chars() {
+                                            if char != '.' {
+                                                username.push(char);
+                                            } else {
+                                                break;
+                                            }
                                         }
-                                    }
-                                    debug_println!("{} just connected", username);
-                                },
-                                Err(e) => eprintln!("Failed to connect to user {}: {}", user_socket, e),
+                                        debug_println!("{} just connected", username);
+                                    },
+                                    Err(e) => eprintln!("Failed to connect to user {}: {}", user_socket, e),
+                                }
                             }
                         }
                     },
