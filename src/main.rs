@@ -212,7 +212,7 @@ async fn main () {
             if event::poll(Duration::from_millis(100)).unwrap() {
                 if let Event::Key(KeyEvent { code, .. }) = event::read().unwrap(){
                     tx.send(code).unwrap();
-                    debug_println!("INPUT: KeyCode: {}", code);
+                    debug_println!("INPUT: KeyCode: {:?}", code);
                 }
 
             }
