@@ -7,7 +7,8 @@ use std::time::Duration;
 #[allow(unused_imports)]
 use audio_sync::audio;
 use std::sync::mpsc::channel;
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use crossterm::terminal::disable_raw_mode;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::thread;
 
 
@@ -44,6 +45,7 @@ fn username_take()-> String {
 #[tokio::main]
 async fn main () {
     // Initial Position
+    disable_raw_mode().expect("Unable to disable raw mode");
     clear_terminal();
     debug_println!("MAIN: AUDIO INITIALIZATION IN PROCESS");
     let (Some(input_device), Some(output_device)) = audio::initialize_audio_interface() else {
@@ -210,11 +212,22 @@ async fn main () {
         debug_println!("INPUT: Reading user keyboard input");
         loop {
             if event::poll(Duration::from_millis(100)).unwrap() {
-                if let Event::Key(KeyEvent { code, .. }) = event::read().unwrap(){
-                    tx.send(code).unwrap();
-                    debug_println!("INPUT: KeyCode: {:?}", code);
+                if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read().unwrap() {
+                    match (code, modifiers) {
+                        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                            tx.send(KeyCode::F(1)).unwrap();
+                            debug_println!("INPUT: Ctrl+r  Pressed");
+                        }
+                        (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
+                            tx.send(KeyCode::F(2)).unwrap();
+                            debug_println!("INPUT: Ctrl+x Pressed");
+                        }
+                        _ => {
+                            tx.send(code).unwrap();
+                            debug_println!("INPUT: Other KeyCode: {:?}", code);
+                        }
+                    }
                 }
-
             }
         }
     });
