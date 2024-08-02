@@ -1,10 +1,20 @@
-use std::net::TcpStream;
+use std::net::{TcpStream, UdpSocket};
 use std::io::{Write, Read};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::time::Duration;
+#[allow(unused_imports)]
+use audio_sync::audio;
+use std::sync::mpsc::channel;
+use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use std::thread;
 
+
+// This here macro below me was written 
+// by chatgpt... it works...
+// (for now) 
+// *play disaster music* 
 #[allow(unused_attributes)]
 #[macro_use]
 macro_rules! debug_println {
@@ -30,19 +40,28 @@ fn username_take()-> String {
     let instance_name = instance_name.replace("\n", "").replace(" ", "_");
     instance_name
 }
-#[allow(dead_code)]
-fn find_position(string: &String, end_mark: char) -> usize {
-    if let Some(pos) = string.chars().position(|b| b == end_mark){
-        return pos
-    } else {
-        debug_println!(" THREAD 2: Failed to get position");
-        0
-    }
-}
 
-fn main () {
+#[tokio::main]
+async fn main () {
     // Initial Position
     clear_terminal();
+    debug_println!("MAIN: AUDIO INITIALIZATION IN PROCESS");
+    let (Some(input_device), Some(output_device)) = audio::initialize_audio_interface() else {
+            debug_println!("MAIN: AUDIO INITIALIZATION FAILED");
+        return;
+    };
+    let input_config = audio::get_audio_config(&input_device)
+        .expect("Failed to get audio input config");
+    debug_println!("MAIN: INPUT AUDIO CONFIG: {:?}", input_config);
+    let output_config = audio::get_audio_config(&output_device)
+        .expect("Failed to get audio output config");
+    debug_println!("MAIN: OUTPUT AUDIO CONFIG: {:?}", output_config);
+    let input_device = Arc::new(Mutex::new(input_device));
+    let input_config = Arc::new(Mutex::new(input_config));
+
+    let audio_buffer = Arc::new(Mutex::new(Vec::new()));
+    debug_println!("MAIN Allocated audio buffer: {:?}", audio_buffer);
+    let received_data = Arc::clone(&audio_buffer);
 
     println!("");
     println!("Enter Username:");
@@ -128,10 +147,116 @@ fn main () {
     // Get information from local host to start tcp stream
     let ip =  local_ip_address::local_ip().unwrap();
     let port: u16 = 18521;
-    let socket_addr = format!("{}:{}", ip, port);
+    let tcp_socket_addr = format!("{}:{}", ip, port);
     // Open TCP port 18521 (listen to connections)
-    let listener = std::net::TcpListener::bind(socket_addr.clone())
+    let listener = std::net::TcpListener::bind(tcp_socket_addr.clone())
         .expect("Failed to bind listener");
+
+    //---- The UDP Thread -----//
+
+    let udp_port: u16 = 18522;
+    let udp_socket_addr = format!("{}:{}", ip, udp_port);
+    let udp_socket = Arc::new(Mutex::new(UdpSocket::bind(udp_socket_addr.clone()).unwrap()));
+    let mut buf = [0; 960];
+    udp_socket.lock().unwrap().recv_from(&mut buf).expect("UDP: Nothing to receive");
+    let ip_table: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let binding = ip_table.clone();
+    let ip_table_clone = binding.lock().unwrap();
+    // ADD CONDITIONAL CALL (WAIT FOR INPUT FROM USER)
+    for (_user, ip) in ip_table_clone.iter() {
+        debug_println!("UDP: Connected to {} on {}", _user, ip);
+        udp_socket.lock().unwrap().connect(ip).unwrap();
+    };
+    let received_data_clone = Arc::clone(&received_data);
+    let udp_socket_clone = Arc::clone(&udp_socket);
+    // Handle incoming audio
+    thread::spawn( move || {
+        let udp_socket = udp_socket_clone.clone();
+        let mut buffer = [0; 960];
+        loop {
+            match udp_socket.lock().unwrap().recv(&mut buffer) {
+                Ok(size) => {
+                    let mut data = received_data_clone.lock().unwrap();
+                    data.extend_from_slice(&buffer[..size]);
+                }
+                Err(e) => {
+                    eprintln!("Failed to receive data: {}", e);
+                }
+            }
+        }
+    });
+
+    #[allow(unused_variables)]
+    let output_stream = audio::start_output_stream(
+        &output_device,
+        &output_config,
+        received_data.clone()
+    ).expect("Failed to start output stream");
+    
+    // ---- Sending Audio - Read User Input ----//
+    let (tx, rx) = channel();
+    thread::spawn(move || {
+        loop {
+            if event::poll(Duration::from_millis(100)).unwrap() {
+                if let Event::Key(KeyEvent { code, .. }) = event::read().unwrap(){
+                    tx.send(code).unwrap();
+                }
+
+            }
+        }
+    });
+
+    let udp_socket_clone_2 = Arc::clone(&udp_socket);
+    let ip_table_clone_2 = Arc::clone(&ip_table);
+    thread::spawn( move || {
+        let mut input_stream = None;
+        loop {
+            match rx.recv().unwrap() {
+                KeyCode::F(1) => {
+                    debug_println!("crossterm: f1: start input stream");
+                    if input_stream.is_none() {
+                        let (stream, receiver) = 
+                            audio::start_input_stream(
+                                &input_device.lock().unwrap(), 
+                                &input_config.lock().unwrap()
+                            )
+                            .expect("Failed to start input stream");
+                        
+                        let receiver = Arc::new(Mutex::new(receiver));
+                        input_stream = Some((stream, Arc::clone(&receiver)));
+                        let udp_socket_2 = Arc::clone(&udp_socket_clone_2);
+                        let ip_table = Arc::clone(&ip_table_clone_2);
+                         thread::spawn(move || {
+                            loop {
+                                // Handle encoded data (await)
+                                if let Ok(opus_data) = receiver.lock().unwrap().recv() {
+                                    let slice: &[u8] = &opus_data;
+                                    let udp_socket_2 = udp_socket_2.lock().unwrap();
+                                    let ip_table_2 = ip_table.lock().unwrap();
+                                    for (user, ip) in ip_table_2.iter() {
+                                        debug_println!("UDP: Sending audio to {} on {}", user, ip);
+                                        if *user == hostname::get().unwrap().to_str().unwrap().to_string() {
+                                            continue;
+                                        }
+                                        udp_socket_2.send_to(slice, ip).expect("Failed to send data");
+                                    };
+                                }
+                            }
+                        });
+                    }
+                }, 
+                KeyCode::F(2) => {
+                    if let Some((stream, _)) = input_stream.take() {
+                        println!("F2 pressed: Stop Input Stream");
+                        audio::stop_audio_stream(stream);
+                    }
+
+                },
+                _ => println!("Pressed a different key"),
+
+            }
+        }
+    });
 
     debug_println!("THREAD 2: Starting TCP stream reader and text generator thread...");
     std::thread::spawn( move || {
@@ -251,8 +376,6 @@ fn main () {
     let receiver = mdns.browse(service_type).expect("Failed to browse");
     debug_println!("MAIN: Browsing for services: {:?}", receiver);
 
-
-
     debug_println!("THREAD 3: Starting mDNS service thread...");
     // Listen for Services, Respond & Store
     loop {
@@ -268,10 +391,19 @@ fn main () {
                             let mut user_table = user_table_clone.lock().unwrap();
                             let user_socket = format!("{}:{}", address, info.get_port());
                             debug_println!("THREAD 3: User Socket: {:?}", user_socket);
+                            let user_udp_socket = format!("{}:18522", address);
+                            let user_hostname = info.get_hostname();
+                            let mut ip_table = ip_table.lock().expect("THREAD 3: Failed to lock ip_table");
+                            ip_table.insert(
+                                user_hostname.to_string(), 
+                                user_udp_socket
+                                );
                             // --------- Tcp Connection ---------//
                             match std::net::TcpStream::connect(&user_socket){
                                 Ok(stream) => {
                                     user_table.insert(info.get_fullname().to_string(), stream);
+                                    
+                                    debug_println!("THREAD 3: Inserted New User into User Table: {:?}", user_table_clone);
                                     debug_println!("THREAD 3: Inserted New User into User Table: {:?}", user_table_clone);
                                     let mut username = String::new();
                                     debug_println!("THREAD 3: Username: {:?}", username);
@@ -297,4 +429,3 @@ fn main () {
     }
     // Optional: Show Services Discovered
 }
-
