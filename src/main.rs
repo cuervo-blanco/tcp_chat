@@ -7,8 +7,6 @@ use std::time::Duration;
 #[allow(unused_imports)]
 use audio_sync::audio;
 use std::sync::mpsc::channel;
-use crossterm::terminal::disable_raw_mode;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::thread;
 
 
@@ -45,7 +43,6 @@ fn username_take()-> String {
 #[tokio::main]
 async fn main () {
     // Initial Position
-    disable_raw_mode().expect("Unable to disable raw mode");
     clear_terminal();
     debug_println!("MAIN: AUDIO INITIALIZATION IN PROCESS");
     let (Some(input_device), Some(output_device)) = audio::initialize_audio_interface() else {
@@ -83,7 +80,9 @@ async fn main () {
     debug_println!("MAIN: Data Structures Initialized");
 
     let name = instance_name.clone();
+
     // -------- Input Thread ------- //
+    let (tx, rx) = channel();
     std::thread::spawn ( move || {
         debug_println!("THREAD 1: Thread Initialized");
         loop {
@@ -93,42 +92,48 @@ async fn main () {
             reader.read_line(&mut buffer).unwrap();
             let input = buffer.trim();
             debug_println!("THREAD 1: User Input: {}", input);
+             if input == "audio.start()" {
+                 tx.send("audio.start()".to_string()).unwrap();
+             } else if input == "audio.stop()" {
+                tx.send("audio.stop()".to_string()).unwrap();
+             } else {
+                 let user_table = user_table.lock().unwrap();
+                 debug_println!("THREAD 1: User Table Lock: {:?}", user_table);
+                 for (user, stream) in user_table.iter() {
+                     // Clean up the name, get rid of .local
+                     let username: String = user.split('.').next().unwrap_or("").to_string();
+                     debug_println!("THREAD 1: Sending message to: {:?}", username);
 
-            let user_table = user_table.lock().unwrap();
-            debug_println!("THREAD 1: User Table Lock: {:?}", user_table);
-            for (user, stream) in user_table.iter() {
-                // Clean up the name, get rid of .local
-                let username: String = user.split('.').next().unwrap_or("").to_string();
-                debug_println!("THREAD 1: Sending message to: {:?}", username);
+                     let message = vec![name.to_string(), input.to_string(), TERMINATOR.to_string()].join(SEPARATOR);
+                     debug_println!("THREAD 1: Message to Send: {:?}", message);
+                     let encoded_message: Vec<u8> = bincode::serialize(&message).unwrap();
+                     debug_println!("THREAD 1: Encoded message: {:?}", encoded_message);
 
-                let message = vec![name.to_string(), input.to_string(), TERMINATOR.to_string()].join(SEPARATOR);
-                debug_println!("THREAD 1: Message to Send: {:?}", message);
-                let encoded_message: Vec<u8> = bincode::serialize(&message).unwrap();
-                debug_println!("THREAD 1: Encoded message: {:?}", encoded_message);
+                     // Verify if this accessing of the operation is valid
+                     debug_println!("THREAD 1: Verifying stream: {:?}", stream);
+                     match stream.try_clone() {
+                         Ok(mut stream) => {
+                             match stream.write(&encoded_message) {
+                                 Ok(_) => {
+                                     debug_println!("THREAD 1: Successfully send message to {}", user);
+                                 }
+                                 Err(e) => {
+                                     eprintln!("THREAD 1: Failed to send message to {}: {}", user, e);
+                                 }
+                             }
+                         },
+                         Err(e) => {
+                             eprintln!("THREAD 1: Failed to clone stream for {}: {}", username, e);
+                             continue;
+                         }
+                     };
+                     // Something must refresh the terminal every second or so clear out the display
+                     // fetch the information from the data structure containing the streams and user names and print it
+                     // Clear out the buffer 
+                     debug_println!("THREAD 1: RESTARTING LOOP #1");
+                 }
+             }
 
-                // Verify if this accessing of the operation is valid
-                debug_println!("THREAD 1: Verifying stream: {:?}", stream);
-                match stream.try_clone() {
-                    Ok(mut stream) => {
-                        match stream.write(&encoded_message) {
-                            Ok(_) => {
-                                debug_println!("THREAD 1: Successfully send message to {}", user);
-                            }
-                            Err(e) => {
-                                eprintln!("THREAD 1: Failed to send message to {}: {}", user, e);
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("THREAD 1: Failed to clone stream for {}: {}", username, e);
-                        continue;
-                    }
-                };
-                // Something must refresh the terminal every second or so clear out the display
-                // fetch the information from the data structure containing the streams and user names and print it
-                // Clear out the buffer 
-                debug_println!("THREAD 1: RESTARTING LOOP #1");
-            }
              debug_println!("THREAD 1: RESTARTING MAIN LOOP");
         }
     });
@@ -207,82 +212,52 @@ async fn main () {
     ).expect("MAIN: Failed to start output stream");
     
     // ---- Sending Audio - Read User Input ----//
-    let (tx, rx) = channel();
-    thread::spawn(move || {
-        debug_println!("INPUT: Reading user keyboard input");
-        loop {
-            if event::poll(Duration::from_millis(100)).unwrap() {
-                if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read().unwrap() {
-                    match (code, modifiers) {
-                        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-                            tx.send(KeyCode::F(1)).unwrap();
-                            debug_println!("INPUT: Ctrl+r  Pressed");
-                        }
-                        (KeyCode::Char('x'), KeyModifiers::CONTROL) => {
-                            tx.send(KeyCode::F(2)).unwrap();
-                            debug_println!("INPUT: Ctrl+x Pressed");
-                        }
-                        _ => {
-                            tx.send(code).unwrap();
-                            debug_println!("INPUT: Other KeyCode: {:?}", code);
-                        }
-                    }
-                }
-            }
-        }
-    });
 
     let udp_socket_clone_2 = Arc::clone(&udp_socket);
     let ip_table_clone_2 = Arc::clone(&ip_table);
-    thread::spawn( move || {
-        debug_println!("UDP: Starting audio input thread");
+    thread::spawn(move || {
+        debug_println!("Starting audio input thread");
         let mut input_stream = None;
         loop {
-            match rx.recv().unwrap() {
-                KeyCode::F(1) => {
-                    debug_println!("CROSSTERM: F1");
-                    if input_stream.is_none() {
-                        let (stream, receiver) = 
-                            audio::start_input_stream(
-                                &input_device.lock().unwrap(), 
-                                &input_config.lock().unwrap()
+            let command = rx.recv().unwrap();
+            if command == "audio.start()" {
+                debug_println!("AUDIO START COMMAND RECEIVED");
+                if input_stream.is_none() {
+                    let (stream, receiver) = 
+                        audio::start_input_stream(
+                            &input_device.lock().unwrap(),
+                            &input_config.lock().unwrap()
                             )
-                            .expect("UDP: Failed to start input stream");
-                        
-                        let receiver = Arc::new(Mutex::new(receiver));
-                        input_stream = Some((stream, Arc::clone(&receiver)));
-                        let udp_socket_2 = Arc::clone(&udp_socket_clone_2);
-                        let ip_table = Arc::clone(&ip_table_clone_2);
-                        debug_println!("UDP: Udp Socket stream and receiver initialized");
-                         thread::spawn(move || {
-                            loop {
-                                // Handle encoded data (await)
-                                if let Ok(opus_data) = receiver.lock().unwrap().recv() {
-                                    let slice: &[u8] = &opus_data;
-                                    debug_println!("UDP: Opus Data received: {:?}", slice);
-                                    let udp_socket_2 = udp_socket_2.lock().unwrap();
-                                    let ip_table_2 = ip_table.lock().unwrap();
-                                    for (user, ip) in ip_table_2.iter() {
-                                        debug_println!("UDP: Sending audio to {} on {}", user, ip);
-                                        if *user == hostname::get().unwrap().to_str().unwrap().to_string() {
-                                            continue;
-                                        }
-                                        udp_socket_2.send_to(slice, ip).expect("Failed to send data");
-                                    };
-                                }
+                        .expect("UDP: Failed to start input stream");
+                    let receiver = Arc::new(Mutex::new(receiver));
+                    input_stream = Some((stream, Arc::clone(&receiver)));
+                    let udp_socket_2 = Arc::clone(&udp_socket_clone_2);
+                    let ip_table = Arc::clone(&ip_table_clone_2);
+                    debug_println!("UDP: Udp Socket stream and receiver initialized");
+                    thread::spawn(move || {
+                        loop {
+                            // Handle encoded data (await)
+                            if let Ok(opus_data) = receiver.lock().unwrap().recv() {
+                                let slice: &[u8] = &opus_data;
+                                debug_println!("UDP: Opus Data received: {:?}", slice);
+                                let udp_socket_2 = udp_socket_2.lock().unwrap();
+                                let ip_table_2 = ip_table.lock().unwrap();
+                                for (user, ip) in ip_table_2.iter() {
+                                    debug_println!("UDP: Sending audio to {} on {}", user, ip);
+                                    if *user == hostname::get().unwrap().to_str().unwrap().to_string() {
+                                        continue;
+                                    }
+                                    udp_socket_2.send_to(slice, ip).expect("Failed to send data");
+                                };
                             }
-                        });
-                    }
-                }, 
-                KeyCode::F(2) => {
-                    if let Some((stream, _)) = input_stream.take() {
-                        debug_println!("F2 pressed: Stop Input Stream");
-                        audio::stop_audio_stream(stream);
-                    }
-
-                },
-                _ => println!("Pressed a different key"),
-
+                        } 
+                    });
+                }
+            } else if command == "audio.stop()" {
+                if let Some((stream, _)) = input_stream.take() {
+                    debug_println!("AUDIO STOP COMMAND RECEIVED");
+                    audio::stop_audio_stream(stream);
+                }
             }
         }
     });
