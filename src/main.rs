@@ -1,300 +1,282 @@
-use std::net::TcpStream;
-use std::io::{Write, Read};
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-#[allow(unused_imports)]
-use std::time::Duration;
+use std::env;
+use std::io::{self, BufRead, Write};
+use std::net::IpAddr;
+use std::thread;
 
-#[allow(unused_attributes)]
-#[macro_use]
-macro_rules! debug_println {
-    ($($arg:tt)*) => (
-        #[cfg(feature = "debug")]
-        println!($($arg)*)
-        )
-}
+use tcp_chat::{ChatConfig, ChatEvent, ChatRuntimeInfo, NetworkInterface, Result};
 
-const SEPARATOR: &str = "#";
-const TERMINATOR: &str = "\n";
+fn main() -> Result<()> {
+    let cli = parse_cli_options()?;
+    let display_name = match cli.display_name {
+        Some(name) => name,
+        None => prompt("Enter your display name: ")?,
+    };
 
-//---Definitions---//
-fn  clear_terminal() {
-    print!("\x1B[2J");
-    std::io::stdout().flush().unwrap();
-}
-fn username_take()-> String {
-    // Take user input (instance name)
-    let reader = std::io::stdin();
-    let mut instance_name = String::new();
-    reader.read_line(&mut instance_name).unwrap();
-    let instance_name = instance_name.replace("\n", "").replace(" ", "_");
-    instance_name
-}
-#[allow(dead_code)]
-fn find_position(string: &String, end_mark: char) -> usize {
-    if let Some(pos) = string.chars().position(|b| b == end_mark){
-        return pos
-    } else {
-        debug_println!(" THREAD 2: Failed to get position");
-        0
+    let room_name = cli
+        .room
+        .or_else(|| env::var("TCP_CHAT_ROOM").ok())
+        .unwrap_or_else(|| "default".to_string());
+    let shared_secret = cli.secret.or_else(|| env::var("TCP_CHAT_SECRET").ok());
+    let bind_addr = cli
+        .bind_addr
+        .or_else(|| env::var("TCP_CHAT_BIND_ADDR").ok())
+        .map(|value| parse_ip_addr("--bind", &value))
+        .transpose()?;
+    let advertise_addr = cli
+        .advertise_addr
+        .or_else(|| env::var("TCP_CHAT_ADVERTISE_ADDR").ok())
+        .map(|value| parse_ip_addr("--advertise", &value))
+        .transpose()?;
+    let port = cli
+        .port
+        .or_else(|| env::var("TCP_CHAT_PORT").ok())
+        .map(|value| parse_port("--port", &value))
+        .transpose()?;
+    let interface_name = cli
+        .interface_name
+        .or_else(|| env::var("TCP_CHAT_INTERFACE").ok());
+
+    let mut config = ChatConfig::new(display_name)?.with_room(room_name)?;
+    if let Some(shared_secret) = shared_secret {
+        config = config.with_shared_secret(shared_secret)?;
     }
-}
+    if let Some(bind_addr) = bind_addr {
+        config = config.with_bind_addr(bind_addr);
+    }
+    if let Some(advertise_addr) = advertise_addr {
+        config = config.with_advertise_addr(advertise_addr);
+    }
+    if let Some(port) = port {
+        config = config.with_port(port);
+    }
+    if let Some(interface_name) = interface_name {
+        config = config.with_interface(interface_name)?;
+    }
 
-fn main () {
-    // Initial Position
-    clear_terminal();
+    let (mut chat, event_rx) = tcp_chat::LanChat::start(config)?;
+    let runtime = chat.runtime_info()?;
 
-    println!("");
-    println!("Enter Username:");
-    // Add validation process? 
-    #[allow(unused_variables)]
-    let instance_name = username_take();
-    clear_terminal();
+    println!("tcp_chat is running.");
+    print_runtime_summary(&runtime);
+    println!("Type a message and press Enter to broadcast it to connected peers.");
+    println!("Use /peers, /status, /interfaces, or /quit.");
 
-    println!("System preparing for take off...");
-    std::thread::sleep(std::time::Duration::from_millis(1000));
-    clear_terminal();
-
-    println!("");
-    // User table to store users discovered and their service information
-    let user_table: Arc<Mutex<HashMap<String, TcpStream>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let user_table_clone = Arc::clone(&user_table);
-    debug_println!("MAIN: Data Structures Initialized");
-    let name = instance_name.clone();
-
-    // -------- Input Thread ------- //
-    std::thread::spawn ( move || {
-        debug_println!("THREAD 1: Thread Initialized");
-        loop {
-            // Take user input
-            let reader = std::io::stdin();
-            let mut buffer: String = String::new();
-            reader.read_line(&mut buffer).unwrap();
-            let input = buffer.trim();
-            debug_println!("THREAD 1: User Input: {}", input);
-
-            let user_table = user_table.lock().unwrap();
-            debug_println!("THREAD 1: User Table Lock: {:?}", user_table);
-            for (user, stream) in user_table.iter() {
-                // Clean up the name, get rid of .local
-                let username: String = user.split('.').next().unwrap_or("").to_string();
-                debug_println!("THREAD 1: Sending message to: {:?}", username);
-
-                let message = vec![name.to_string(), input.to_string(), TERMINATOR.to_string()].join(SEPARATOR);
-                debug_println!("THREAD 1: Message to Send: {:?}", message);
-                let encoded_message: Vec<u8> = bincode::serialize(&message).unwrap();
-                debug_println!("THREAD 1: Encoded message: {:?}", encoded_message);
-
-                // Verify if this accessing of the operation is valid
-                debug_println!("THREAD 1: Verifying stream: {:?}", stream);
-                match stream.try_clone() {
-                    Ok(mut stream) => {
-                        match stream.write(&encoded_message) {
-                            Ok(_) => {
-                                debug_println!("THREAD 1: Successfully send message to {}", user);
-                            }
-                            Err(e) => {
-                                eprintln!("THREAD 1: Failed to send message to {}: {}", user, e);
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("THREAD 1: Failed to clone stream for {}: {}", username, e);
-                        continue;
-                    }
-                };
-                // Something must refresh the terminal every second or so clear out the display
-                // fetch the information from the data structure containing the streams and user names and print it
-                // Clear out the buffer 
-                debug_println!("THREAD 1: RESTARTING LOOP #1");
+    let event_thread = thread::spawn(move || {
+        while let Ok(event) = event_rx.recv() {
+            match event {
+                ChatEvent::PeerDiscovered(peer) => {
+                    println!("[discovered] {} ({})", peer.display_name, peer.peer_id);
+                }
+                ChatEvent::PeerConnected(peer) => {
+                    println!("[connected] {}", peer.display_name);
+                }
+                ChatEvent::PeerDisconnected(peer) => {
+                    println!("[disconnected] {}", peer.display_name);
+                }
+                ChatEvent::MessageReceived(message) => {
+                    println!("{}: {}", message.display_name, message.body);
+                }
+                ChatEvent::Warning(message) => {
+                    eprintln!("[warning] {message}");
+                }
             }
-             debug_println!("THREAD 1: RESTARTING MAIN LOOP");
         }
     });
 
-    // A thread to receive the bytes coming from a tcp stream, 
-    // convert the byte stream into a String (with a termination symbol
-    // or null character to signify the end of the message of a user
-    // the messages are going to be strutured as such:
-    // sender/#t/message/n
-    // with /n being the escape character
-    // with t standig for text and e for end
-    // When it packages the info it passes it to the print thread
-    // that will update the current position and print the provided strings
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
 
-    //---- The TCP Thread -----//
-
-    debug_println!("THREAD 2: Thread Initializing Parameters");
-    // Get information from local host to start tcp stream
-    let ip =  local_ip_address::local_ip().unwrap();
-    let port: u16 = 18521;
-    let socket_addr = format!("{}:{}", ip, port);
-    // Open TCP port 18521 (listen to connections)
-    let listener = std::net::TcpListener::bind(socket_addr.clone())
-        .expect("Failed to bind listener");
-
-    debug_println!("THREAD 2: Starting TCP stream reader and text generator thread...");
-    std::thread::spawn( move || {
-        debug_println!("THREAD 2: Succesful Deployment of Thread.");
-        loop {
-            debug_println!("THREAD 2: Entering Thread Loop.");
-            for tcp_stream in listener.incoming() {
-                debug_println!("THREAD 2: Listening for incoming packets.");
-                match tcp_stream {
-                    Ok(stream) => {
-                            let mut stream = stream.try_clone().unwrap();
-                            debug_println!("THREAD 2: Stream Cloned <{:?}>", stream);
-                            std::thread::spawn(move || {
-                                let mut buffer = [0; 512];
-                                debug_println!("THREAD 2: Memory allocated to buffer: {:?}", buffer);
-                                loop {
-                                    match stream.read(&mut buffer) {
-                                        Ok(bytes_read) => {
-                                            if bytes_read == 0 {
-                                            break;
-                                            }
-
-                                            debug_println!("THREAD 2: Incoming Bytes_Read: {:?}", &buffer[..bytes_read]);
-                                            let incoming_message = &buffer[..bytes_read];
-                                            debug_println!("THREAD 2: Incoming Message: {:?}", incoming_message);
-
-                                            let mut data = Vec::new();
-                                            debug_println!("THREAD 2: Allocating Memory (DATA) for Incoming Message: data {:?}", data);
-
-                                            data.extend_from_slice(incoming_message);
-                                            debug_println!("THREAD 2: Saving buffer: data {:?}", data);
-                                            let filtered_data: Vec<u8> = data
-                                                .into_iter()
-                                                .filter(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                                                .collect();
-                                            let msg: String = match String::from_utf8(filtered_data) {
-                                                Ok(s) => {
-                                                    debug_println!("THREAD 2: Converted string: {}", s);
-                                                    s
-                                                },
-                                                Err(e) => { 
-                                                    eprintln!("THREAD 2: Failed to convert bytes to string: {}", e);
-                                                    continue;
-                                                }
-                                            };
-
-                                            debug_println!("THREAD 2: Message: {:?}", msg);
-                                            let pos = msg.find(TERMINATOR).unwrap_or(msg.len());
-                                            debug_println!("THREAD 2: Finding position of message_end: {:?}", pos);
-                                            let text = &msg[..pos];
-                                            debug_println!("THREAD 2: Splitting message: {}", text);
-
-                                            // Update the positions 
-                                            // Send the header to the print thread
-                                            debug_println!("THREAD 2: Converting message to string: {}", text);
-                                            let mut spread = Vec::new();
-                                            debug_println!("THREAD 2: Allocating Memory for received message: {:?}", spread);
-
-                                            if let Some(slash_index) = text.find(SEPARATOR) {
-                                                let username: &str = &text[..slash_index];
-                                                spread.push(username.to_string());
-                                                let message: &str = &text[slash_index + 1..text.len() - 1];
-                                                spread.push(message.to_string());
-                                            }
-                                            debug_println!("THREAD 2: Cleaning up message: {:?}", spread);
-                                            // Print message on screen
-                                            if !spread.is_empty() {
-                                                println!("{}", spread.join(": "));
-                                            }
-                                        },
-                                        Err(e) => {
-                                            eprintln!("Failed to read from stream: {}", e);
-                                            break;
-                                        }
-                                    }
-                                }
-                            });
-                        },
-                        Err(e) => println!("Error getting stream: {}", e),
-                    }
-                }
-            }
-    });
-
-    // ----------- mDNS Service Thread ----------//
-    
-    // Configure Service
-    debug_println!("MAIN: Commencing mDNS Service");
-    let mdns = mdns_sd::ServiceDaemon::new().expect("Failed to create daemon");
-    let service_type = "_tcp_chat._tcp.local.";
-    let ip =  local_ip_address::local_ip().unwrap();
-    debug_println!("MAIN: Connecting to Local IP address: {}", ip);
-    let host_name =  hostname::get()
-        .expect("MAIN: Unable to get host name");
-    let host_name = host_name.to_str()
-        .expect("MAIN: Unable to convert to string");
-    let host_name = format!("{}.local.", host_name);
-    debug_println!("MAIN: Host name: {}", host_name);
-    let properties = [("property_1", "attribute_1"), ("property_2", "attribute_2")];
-
-    // Create Service
-    let tcp_chat_service = mdns_sd::ServiceInfo::new(
-        service_type,
-        &instance_name,
-        host_name.as_str(),
-        ip,
-        port,
-        &properties[..],
-        ).unwrap();
-    debug_println!("MAIN: Service Info created: {:?}", tcp_chat_service);
-
-    // Broadcast service
-    mdns.register(tcp_chat_service).expect("Failed to register service");
-    debug_println!("MAIN: Service registered");
-
-    // Query for Services
-    let receiver = mdns.browse(service_type).expect("Failed to browse");
-    debug_println!("MAIN: Browsing for services: {:?}", receiver);
-
-
-
-    debug_println!("THREAD 3: Starting mDNS service thread...");
-    // Listen for Services, Respond & Store
     loop {
-        debug_println!("THREAD 3: Starting Thread 3 loop");
-            while let Ok(event) = receiver.recv() {
-                match event {
-                    mdns_sd::ServiceEvent::ServiceResolved(info) => {
-                        debug_println!("THREAD 3: Service resolved: {:?}", info);
-                        // Send request to create tcp connection
-                        let addresses = info.get_addresses_v4();
-                        debug_println!("THREAD 3: Addresses found: {:?}", addresses);
-                        for address in addresses {
-                            let mut user_table = user_table_clone.lock().unwrap();
-                            let user_socket = format!("{}:{}", address, info.get_port());
-                            debug_println!("THREAD 3: User Socket: {:?}", user_socket);
-                            // --------- Tcp Connection ---------//
-                            match std::net::TcpStream::connect(&user_socket){
-                                Ok(stream) => {
-                                    user_table.insert(info.get_fullname().to_string(), stream);
-                                    debug_println!("THREAD 3: Inserted New User into User Table: {:?}", user_table_clone);
-                                    let mut username = String::new();
-                                    debug_println!("THREAD 3: Username: {:?}", username);
-                                    for char in info.get_fullname().chars() {
-                                        if char != '.' {
-                                            username.push(char);
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    debug_println!("{} just connected", username);
-                                },
-                                Err(e) => eprintln!("Failed to connect to user {}: {}", user_socket, e),
-                            }
-                        }
-                    },
-                    _ => {
+        print!("> ");
+        io::stdout().flush()?;
 
+        let Some(line) = lines.next() else {
+            break;
+        };
+        let line = line?;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match trimmed {
+            "/quit" | "/exit" => break,
+            "/peers" => {
+                let peers = chat.peers();
+                if peers.is_empty() {
+                    println!("No peers discovered yet.");
+                } else {
+                    for peer in peers {
+                        println!("- {} [{}]", peer.display_name, peer.peer_id);
                     }
                 }
             }
-            debug_println!("THREAD 3: Restarting Loop");
+            "/status" => {
+                print_runtime_summary(&chat.runtime_info()?);
+            }
+            "/interfaces" => {
+                print_interfaces(&tcp_chat::LanChat::local_interfaces()?);
+            }
+            "/help" => print_help(),
+            _ => chat.send(trimmed.to_string())?,
+        }
     }
-    // Optional: Show Services Discovered
+
+    chat.shutdown();
+    drop(chat);
+    let _ = event_thread.join();
+
+    Ok(())
 }
 
+#[derive(Default)]
+struct CliOptions {
+    display_name: Option<String>,
+    room: Option<String>,
+    secret: Option<String>,
+    bind_addr: Option<String>,
+    advertise_addr: Option<String>,
+    port: Option<String>,
+    interface_name: Option<String>,
+}
+
+fn parse_cli_options() -> Result<CliOptions> {
+    let mut cli = CliOptions::default();
+    let mut args = env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--room" | "-r" => {
+                cli.room = Some(next_option_value("--room", &mut args)?);
+            }
+            "--secret" | "-s" => {
+                cli.secret = Some(next_option_value("--secret", &mut args)?);
+            }
+            "--bind" => {
+                cli.bind_addr = Some(next_option_value("--bind", &mut args)?);
+            }
+            "--advertise" => {
+                cli.advertise_addr = Some(next_option_value("--advertise", &mut args)?);
+            }
+            "--port" | "-p" => {
+                cli.port = Some(next_option_value("--port", &mut args)?);
+            }
+            "--interface" | "-i" => {
+                cli.interface_name = Some(next_option_value("--interface", &mut args)?);
+            }
+            "--help" | "-h" => {
+                print_help();
+                std::process::exit(0);
+            }
+            _ if arg.starts_with("--room=") => {
+                cli.room = Some(arg["--room=".len()..].to_string());
+            }
+            _ if arg.starts_with("--secret=") => {
+                cli.secret = Some(arg["--secret=".len()..].to_string());
+            }
+            _ if arg.starts_with("--bind=") => {
+                cli.bind_addr = Some(arg["--bind=".len()..].to_string());
+            }
+            _ if arg.starts_with("--advertise=") => {
+                cli.advertise_addr = Some(arg["--advertise=".len()..].to_string());
+            }
+            _ if arg.starts_with("--port=") => {
+                cli.port = Some(arg["--port=".len()..].to_string());
+            }
+            _ if arg.starts_with("--interface=") => {
+                cli.interface_name = Some(arg["--interface=".len()..].to_string());
+            }
+            _ if cli.display_name.is_none() => {
+                cli.display_name = Some(arg);
+            }
+            _ => {
+                return Err(tcp_chat::LanChatError::Config(format!(
+                    "unexpected argument: {arg}"
+                )));
+            }
+        }
+    }
+
+    Ok(cli)
+}
+
+fn next_option_value(option_name: &str, args: &mut impl Iterator<Item = String>) -> Result<String> {
+    args.next()
+        .ok_or_else(|| tcp_chat::LanChatError::Config(format!("{option_name} requires a value")))
+}
+
+fn parse_ip_addr(option_name: &str, value: &str) -> Result<IpAddr> {
+    value.parse::<IpAddr>().map_err(|error| {
+        tcp_chat::LanChatError::Config(format!("{option_name} must be a valid IP address: {error}"))
+    })
+}
+
+fn parse_port(option_name: &str, value: &str) -> Result<u16> {
+    value.parse::<u16>().map_err(|error| {
+        tcp_chat::LanChatError::Config(format!("{option_name} must be a valid TCP port: {error}"))
+    })
+}
+
+fn prompt(label: &str) -> Result<String> {
+    print!("{label}");
+    io::stdout().flush()?;
+
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    Ok(value)
+}
+
+fn print_help() {
+    println!(
+        "Usage: tcp_chat [display_name] [--room ROOM] [--secret SECRET] [--bind IP] [--advertise IP] [--port PORT] [--interface NAME]"
+    );
+    println!("Environment variables:");
+    println!("  TCP_CHAT_ROOM   default room if --room is omitted");
+    println!("  TCP_CHAT_SECRET shared secret if --secret is omitted");
+    println!("  TCP_CHAT_BIND_ADDR   bind address override");
+    println!("  TCP_CHAT_ADVERTISE_ADDR   advertised LAN address override");
+    println!("  TCP_CHAT_PORT   TCP port override (defaults to 0 for auto)");
+    println!("  TCP_CHAT_INTERFACE   mDNS interface name override (for example en0)");
+    println!("Commands:");
+    println!("  /peers   list currently known peers");
+    println!("  /status  show bind/listen/advertise settings");
+    println!("  /interfaces   show active IPv4 interfaces");
+    println!("  /quit    exit the client");
+    println!("  /help    show this help");
+}
+
+fn print_runtime_summary(runtime: &ChatRuntimeInfo) {
+    let auth_status = if runtime.auth_required {
+        "shared-secret authentication enabled"
+    } else {
+        "no shared-secret authentication"
+    };
+    let advertise_mode = runtime
+        .advertise_addr
+        .map(|address| format!("explicit {address}"))
+        .unwrap_or_else(|| "automatic IPv4 interface advertisement".to_string());
+    let interface_name = runtime
+        .mdns_interface
+        .as_deref()
+        .unwrap_or("all active IPv4 interfaces");
+
+    println!("Room: {} ({auth_status})", runtime.room_name);
+    println!("Peer id: {}", runtime.peer_id);
+    println!("Listening on: {}", runtime.listen_addr);
+    println!("Bind address: {}", runtime.bind_addr);
+    println!("mDNS interface: {interface_name}");
+    println!("Advertise mode: {advertise_mode}");
+}
+
+fn print_interfaces(interfaces: &[NetworkInterface]) {
+    if interfaces.is_empty() {
+        println!("No active IPv4 LAN interfaces detected.");
+        return;
+    }
+
+    println!("Active IPv4 LAN interfaces:");
+    for interface in interfaces {
+        println!("- {} {}", interface.name, interface.address);
+    }
+}
